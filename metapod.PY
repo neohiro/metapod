@@ -9,6 +9,7 @@ import os
 
 # Data structure containing all settings, categorized for the GUI tabs.
 # PowerShell commands are now more robust with ExecutionPolicy Bypass.
+# UPDATED: PowerShell 2.0 commands now use a 'Find and Disable' logic to prevent 'Feature Unknown' errors.
 SETTINGS = {
     "File Associations": [
         {"name": "Harden .hta files (open in Notepad)", "enable": 'ftype htafile="%SystemRoot%\\system32\\NOTEPAD.EXE" "%1"', "disable": 'ftype htafile="%SystemRoot%\\System32\\mshta.exe" "%1" %*'},
@@ -78,6 +79,15 @@ SETTINGS = {
         {"name": "Disable LLMNR (DNS alternative)", "enable": 'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient" /v EnableMulticast /t REG_DWORD /d 0 /f', "disable": 'reg delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient" /v EnableMulticast /f'},
         {"name": "Firewall: Block Notepad network connections", "enable": 'Netsh advfirewall firewall add rule name="Block Notepad.exe netconns" program="%systemroot%\\system32\\notepad.exe" dir=out action=block', "disable": 'Netsh advfirewall firewall delete rule name="Block Notepad.exe netconns"'},
         {"name": "Firewall: Block Calculator network connections", "enable": 'Netsh advfirewall firewall add rule name="Block calc.exe netconns" program="%systemroot%\\system32\\calc.exe" dir=out action=block', "disable": 'Netsh advfirewall firewall delete rule name="Block calc.exe netconns"'},
+    ],
+    "Advanced Hardening": [
+        {"name": "Disable WPAD (Proxy Auto-Discovery)", "enable": 'reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Wpad" /v WpadOverride /t REG_DWORD /d 1 /f', "disable": 'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings\\Wpad" /v WpadOverride /f'},
+        {"name": "Disable PowerShell 2.0 (Downgrade Attack)", "enable": 'powershell -ExecutionPolicy Bypass -Command "Get-WindowsOptionalFeature -Online | Where-Object { $_.FeatureName -like \'*PowerShellV2*\' } | Disable-WindowsOptionalFeature -Online -NoRestart"', "disable": 'powershell -ExecutionPolicy Bypass -Command "Get-WindowsOptionalFeature -Online | Where-Object { $_.FeatureName -like \'*PowerShellV2*\' } | Enable-WindowsOptionalFeature -Online -All -NoRestart"'},
+        {"name": "Disable Print Spooler Service", "enable": 'powershell -ExecutionPolicy Bypass -Command "Stop-Service Spooler -Force; Set-Service Spooler -StartupType Disabled"', "disable": 'powershell -ExecutionPolicy Bypass -Command "Set-Service Spooler -StartupType Automatic; Start-Service Spooler"'},
+        {"name": "Disable Remote Desktop (RDP)", "enable": 'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 1 /f', "disable": 'reg add "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f'},
+        {"name": "Disable Windows Remote Management (WinRM)", "enable": 'powershell -ExecutionPolicy Bypass -Command "Stop-Service WinRM -Force; Set-Service WinRM -StartupType Disabled"', "disable": 'powershell -ExecutionPolicy Bypass -Command "Set-Service WinRM -StartupType Automatic; Start-Service WinRM"'},
+        {"name": "Disable Windows Timeline (Activity Feed)", "enable": 'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\System" /v EnableActivityFeed /t REG_DWORD /d 0 /f', "disable": 'reg delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\System" /v EnableActivityFeed /f'},
+        {"name": "Block DMA Devices when Locked", "enable": 'reg add "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DMAGuard" /v DeviceEnumerationPolicy /t REG_DWORD /d 0 /f', "disable": 'reg delete "HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\DMAGuard" /v DeviceEnumerationPolicy /f'},
     ]
 }
 
@@ -161,8 +171,8 @@ class HardeningTool:
                 creationflags=subprocess.CREATE_NO_WINDOW
             )
             # communicate() waits for the process to finish and gets the output.
-            # A timeout is crucial to prevent hangs.
-            stdout, stderr = proc.communicate(timeout=15)
+            # UPDATED: Increased timeout to 60s because scanning features can be slow.
+            stdout, stderr = proc.communicate(timeout=60)
 
             if stdout:
                 self.log_queue.put(f"    Output: {stdout.strip()}")
@@ -174,7 +184,7 @@ class HardeningTool:
             else:
                  self.log_queue.put(f"[-] Command finished with code {proc.returncode}: {name}")
         except subprocess.TimeoutExpired:
-            self.log_queue.put(f"    Error: Command timed out after 15 seconds and was killed.")
+            self.log_queue.put(f"    Error: Command timed out after 60 seconds and was killed.")
             proc.kill()  # Ensure the hung process is terminated
             proc.communicate() # Clean up the streams
         except Exception as e:
