@@ -337,7 +337,7 @@ RECOMMENDED_PRESET = {
         # Additional safe hardening
         "add_wsh_disable", "add_autorun_disable", "add_clipboard_history_disable", "add_smartscreen_system",
     ],
-    "disable": []  # unused today
+    "disable": []
 }
 
 # ------------------------- UI TOOLTIP HELPER -------------------------
@@ -375,11 +375,12 @@ class HardeningTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Metapod Hardening — Sidebar UI")
-        self.root.geometry("1000x720")
+        self.root.geometry("1100x720")
 
         self.log_queue = Queue()
         self.backup_before_changes = tk.BooleanVar(value=True)
-        self.vars = {}  # map setting id -> tk.BooleanVar
+        self.vars = {}  # map setting id -> tk.BooleanVar (CheckBox: Active/Skip)
+        self.action_vars = {} # map setting id -> tk.StringVar (Combobox: Enable/Disable)
         self.last_backup_dir = None
 
         # Top frame controls
@@ -461,7 +462,8 @@ class HardeningTool:
         # Build variables for each setting
         for cat, items in SETTINGS.items():
             for s in items:
-                self.vars[s['id']] = tk.BooleanVar(value=True)
+                self.vars[s['id']] = tk.BooleanVar(value=True) # Checked = Act, Unchecked = Skip
+                self.action_vars[s['id']] = tk.StringVar(value="Enable") # Action to perform if Checked
 
         # Keep the mapping of widgets for tooltips
         self.checkbox_widgets = {}
@@ -486,16 +488,21 @@ class HardeningTool:
             frame = ttk.Frame(self.options_frame)
             frame.pack(fill=tk.X, pady=2, padx=2)
 
+            # Checkbox (Select to Act)
             chk = ttk.Checkbutton(frame, text=s['name'], variable=self.vars[s['id']])
             chk.pack(side=tk.LEFT, anchor='w')
             Tooltip(chk, s.get('desc', ''))
 
-            # info button shows full description in a dialog
+            # Info button
             def make_info(desc, title=s['name']):
                 return lambda: messagebox.showinfo(title, desc)
 
             info_btn = ttk.Button(frame, text='i', width=2, command=make_info(s.get('desc', '')))
             info_btn.pack(side=tk.RIGHT, padx=6)
+
+            # Combobox (Enable vs Disable)
+            combo = ttk.Combobox(frame, textvariable=self.action_vars[s['id']], values=["Enable", "Disable"], state="readonly", width=8)
+            combo.pack(side=tk.RIGHT, padx=6)
 
             self.checkbox_widgets[s['id']] = chk
 
@@ -577,15 +584,24 @@ class HardeningTool:
                 self.log_queue.put('[+] Safety steps completed. Proceeding to apply changes...')
             except Exception as e:
                 self.log_queue.put(f"[!] Failed safety steps: {e}")
+        
         # Apply each setting in order of categories
         for cat, items in SETTINGS.items():
             for s in items:
                 var = self.vars.get(s['id'])
+                action_var = self.action_vars.get(s['id'])
+
                 if var and var.get():
-                    self.run_command(s.get('enable', ''), f"Enable {s['name']}")
+                    # Checkbox is Checked -> Do Action
+                    action = action_var.get()
+                    if action == "Enable":
+                        self.run_command(s.get('enable', ''), f"Enable {s['name']}")
+                    elif action == "Disable":
+                        self.run_command(s.get('disable', ''), f"Disable {s['name']}")
                 else:
-                    # run disable if present
-                    self.run_command(s.get('disable', ''), f"Disable {s['name']}")
+                    # Checkbox is Unchecked -> Skip
+                    self.log_queue.put(f"Skipping: {s['name']}")
+
         self.log_queue.put('All tasks completed.')
         self.log_queue.put('TASK_COMPLETE')
 
@@ -608,12 +624,23 @@ class HardeningTool:
     def apply_recommended_preset(self):
         if not messagebox.askyesno('Apply Recommended Preset', 'Apply the recommended safe baseline preset?\nThis will set selections but will NOT apply changes.'):
             return
-        # deselect all first
+        
+        # Reset all first (uncheck everything)
         for k in self.vars:
             self.vars[k].set(False)
+        
+        # Apply Enabled preset items
         for sid in RECOMMENDED_PRESET.get('enable', []):
             if sid in self.vars:
                 self.vars[sid].set(True)
+                self.action_vars[sid].set("Enable")
+
+        # Apply Disabled preset items
+        for sid in RECOMMENDED_PRESET.get('disable', []):
+            if sid in self.vars:
+                self.vars[sid].set(True)
+                self.action_vars[sid].set("Disable")
+
         # refresh view
         sel = self.cat_listbox.curselection()
         if sel:
